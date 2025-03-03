@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenSail - Realistic Boat Physics</title>
+<script defer src="/bundle.js"></script></head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        
+        <div id="ui-overlay">
+            <div id="wind-indicator">
+                <div id="wind-arrow"></div>
+                <div id="wind-speed">0 knots</div>
+            </div>
+            
+            <div id="boat-info">
+                <div id="heading">Heading: 0°</div>
+                <div id="speed">Speed: 0 knots</div>
+                <div id="throttle">Throttle: 0%</div>
+                <div id="rudder">Rudder: 0°</div>
+            </div>
+            
+            <div id="race-info">
+                <div id="position">Position: --</div>
+                <div id="timer">00:00</div>
+            </div>
+            
+            <div id="controls-help">
+                <p>W/S: Throttle Forward/Reverse (gradual acceleration)</p>
+                <p>A/D: Steer Left/Right (realistic turning physics)</p>
+                <p>Best turning at medium speeds (5-10 knots)</p>
+                <p>Mouse: Rotate camera | Scroll: Zoom in/out</p>
+            </div>
+        </div>
+        
+        <div id="game-menu" class="overlay">
+            <h1>OpenSail</h1>
+            <h2>Realistic Boat Physics Simulation</h2>
+            <button id="start-game">Start Simulation</button>
+            <button id="join-game">Join Multiplayer</button>
+            <div id="player-name-container">
+                <input type="text" id="player-name" placeholder="Your Name">
+            </div>
+        </div>
+        
+        <div id="loading-screen" class="overlay">
+            <h2>Loading Realistic Boat Simulation...</h2>
+            <div id="loading-bar-container">
+                <div id="loading-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- The bundle.js file will be automatically injected by HtmlWebpackPlugin -->
+</body>
+</html> 

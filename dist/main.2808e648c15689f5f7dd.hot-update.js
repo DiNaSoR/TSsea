@@ -1,0 +1,685 @@
+"use strict";
+self["webpackHotUpdateopensail"]("main",{
+
+/***/ "./src/js/water.js":
+/*!*************************!*\
+  !*** ./src/js/water.js ***!
+  \*************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/**
+ * WebGL Water implementation inspired by Evan Wallace's WebGL Water
+ * https://madebyevan.com/webgl-water/
+ */
+
+class Water {
+    /**
+     * Create a new WebGL Water simulation
+     * @param {Object} options - Water configuration options
+     * @param {THREE.Scene} options.scene - Three.js scene to add water to
+     * @param {Number} options.width - Width of the water surface
+     * @param {Number} options.height - Height of the water surface
+     */
+    constructor(options = {}) {
+        this.scene = options.scene;
+        this.width = options.width || 5000;
+        this.height = options.height || 5000;
+        this.resolution = options.resolution || 256;
+        
+        // Get the renderer from the scene
+        if (this.scene && this.scene.renderer) {
+            this.renderer = this.scene.renderer;
+        }
+        
+        // Check if required WebGL extensions are available
+        this.checkExtensions();
+        
+        // Create the water mesh
+        this.createWaterMesh();
+        
+        // Set up textures and framebuffers for water simulation
+        this.setupSimulation();
+        
+        // Set up shaders
+        this.setupShaders();
+    }
+    
+    /**
+     * Check if required WebGL extensions are available
+     */
+    checkExtensions() {
+        const gl = this.getGLContext();
+        if (!gl) return;
+        
+        // Set high precision if available
+        gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.HIGH_FLOAT);
+        gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+        
+        // Check for floating point texture support (with fallbacks)
+        this.hasFloatTextures = !!gl.getExtension('OES_texture_float');
+        this.hasFloatTextureLinear = !!gl.getExtension('OES_texture_float_linear');
+        this.hasHalfFloatTextures = !!gl.getExtension('OES_texture_half_float');
+        this.hasHalfFloatTextureLinear = !!gl.getExtension('OES_texture_half_float_linear');
+        
+        // Enable additional extensions that might help
+        gl.getExtension('WEBGL_color_buffer_float');
+        gl.getExtension('EXT_color_buffer_float');
+        gl.getExtension('EXT_color_buffer_half_float');
+        
+        if (!this.hasFloatTextures && !this.hasHalfFloatTextures) {
+            console.warn('This water simulation requires floating point texture support.');
+            // Fall back to use standard texture formats
+            this.useFallbackTextures = true;
+        }
+    }
+    
+    /**
+     * Get the WebGL context
+     * @returns {WebGLRenderingContext} The WebGL context
+     */
+    getGLContext() {
+        if (!this.renderer) {
+            // Create a temporary renderer if one doesn't exist
+            this.renderer = new THREE.WebGLRenderer({ antialias: true });
+            this.renderer.setSize(1, 1); // Minimal size for context
+            this.isTemporaryRenderer = true;
+        }
+        return this.renderer.getContext();
+    }
+    
+    /**
+     * Create the water mesh
+     */
+    createWaterMesh() {
+        // Create a plane for the water surface
+        const geometry = new THREE.PlaneGeometry(this.width, this.height, 1, 1);
+        geometry.rotateX(-Math.PI / 2); // Make it horizontal
+        
+        // Create a placeholder texture for initialization
+        const placeholderTexture = new THREE.DataTexture(
+            new Float32Array([0, 0, 0, 1]), // Single pixel RGBA
+            1, 1, 
+            THREE.RGBAFormat, 
+            THREE.FloatType
+        );
+        placeholderTexture.needsUpdate = true;
+        
+        // Create water material with custom shader
+        this.waterMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                time: { value: 0 },
+                waterTexture: { value: placeholderTexture },
+                sunDirection: { value: new THREE.Vector3(0.5, 0.5, 0).normalize() },
+                camera: { value: new THREE.Vector3() },
+                waterColor: { value: new THREE.Color(0x0099ff) },
+            },
+            vertexShader: this.getWaterVertexShader(),
+            fragmentShader: this.getWaterFragmentShader(),
+            transparent: true,
+            side: THREE.DoubleSide,
+            defines: {
+                USE_UV: ''
+            }
+        });
+        
+        // Create the mesh and add it to the scene
+        this.waterMesh = new THREE.Mesh(geometry, this.waterMaterial);
+        this.waterMesh.receiveShadow = true;
+        if (this.scene) {
+            this.scene.add(this.waterMesh);
+        }
+    }
+    
+    /**
+     * Set up textures and framebuffers for water simulation
+     */
+    setupSimulation() {
+        const gl = this.getGLContext();
+        if (!gl) return;
+        
+        // Determine texture type based on available extensions
+        let textureType = THREE.UnsignedByteType;
+        let filter = THREE.LinearFilter;
+        
+        if (!this.useFallbackTextures) {
+            if (this.hasFloatTextures) {
+                textureType = THREE.FloatType;
+                filter = this.hasFloatTextureLinear ? THREE.LinearFilter : THREE.NearestFilter;
+            } else if (this.hasHalfFloatTextures) {
+                textureType = THREE.HalfFloatType;
+                filter = this.hasHalfFloatTextureLinear ? THREE.LinearFilter : THREE.NearestFilter;
+            }
+        }
+        
+        // Create render targets with appropriate settings
+        const rtOptions = {
+            type: textureType,
+            minFilter: filter,
+            magFilter: filter,
+            format: THREE.RGBAFormat,
+            stencilBuffer: false,
+            depthBuffer: false,
+            generateMipmaps: false
+        };
+        
+        // Create textures for water simulation
+        this.textureA = new THREE.WebGLRenderTarget(
+            this.resolution, 
+            this.resolution, 
+            rtOptions
+        );
+        
+        this.textureB = this.textureA.clone();
+        
+        // Initialize the textures with calm water
+        this.initializeTextures();
+    }
+    
+    /**
+     * Initialize the water textures
+     */
+    initializeTextures() {
+        // Create a simple shader to initialize the water texture
+        const initShader = new THREE.ShaderMaterial({
+            uniforms: {},
+            vertexShader: this.getVertexShader(),
+            fragmentShader: `
+                void main() {
+                    // Initialize with still water (r=height, g=velocity, ba=normal)
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        // Render to both textures to initialize them
+        const renderTarget = this.renderer.getRenderTarget();
+        
+        this.renderer.setRenderTarget(this.textureA);
+        this.renderQuad(initShader);
+        
+        this.renderer.setRenderTarget(this.textureB);
+        this.renderQuad(initShader);
+        
+        this.renderer.setRenderTarget(renderTarget);
+    }
+    
+    /**
+     * Set up shaders for water simulation
+     */
+    setupShaders() {
+        // Create a placeholder texture to avoid null references
+        const placeholderTexture = new THREE.DataTexture(
+            new Float32Array([0, 0, 0, 1]), // Single pixel RGBA
+            1, 1, 
+            THREE.RGBAFormat, 
+            THREE.FloatType
+        );
+        placeholderTexture.needsUpdate = true;
+        
+        // Create drop shader (for adding water drops)
+        this.dropShader = new THREE.ShaderMaterial({
+            uniforms: {
+                texture: { value: placeholderTexture },
+                center: { value: new THREE.Vector2(0, 0) },
+                radius: { value: 0.05 },
+                strength: { value: 0.5 },
+            },
+            vertexShader: this.getVertexShader(),
+            fragmentShader: this.getDropFragmentShader(),
+        });
+        
+        // Create update shader (for water physics)
+        this.updateShader = new THREE.ShaderMaterial({
+            uniforms: {
+                texture: { value: placeholderTexture },
+                delta: { value: new THREE.Vector2(1/this.resolution, 1/this.resolution) },
+            },
+            vertexShader: this.getVertexShader(),
+            fragmentShader: this.getUpdateFragmentShader(),
+        });
+        
+        // Create normal shader (for calculating water normals)
+        this.normalShader = new THREE.ShaderMaterial({
+            uniforms: {
+                texture: { value: placeholderTexture },
+                delta: { value: new THREE.Vector2(1/this.resolution, 1/this.resolution) },
+            },
+            vertexShader: this.getVertexShader(),
+            fragmentShader: this.getNormalFragmentShader(),
+        });
+    }
+    
+    /**
+     * Get the basic vertex shader for the simulation
+     */
+    getVertexShader() {
+        return `
+            precision highp float;
+            
+            varying vec2 coord;
+            void main() {
+                // Convert vertices to texture coordinates
+                coord = position.xy * 0.5 + 0.5;
+                gl_Position = vec4(position.xyz, 1.0);
+            }
+        `;
+    }
+    
+    /**
+     * Get the drop fragment shader
+     */
+    getDropFragmentShader() {
+        return `
+            precision highp float;
+            
+            const float PI = 3.141592653589793;
+            uniform sampler2D texture;
+            uniform vec2 center;
+            uniform float radius;
+            uniform float strength;
+            varying vec2 coord;
+            void main() {
+                /* get vertex info */
+                vec4 info = texture(texture, coord);
+                
+                /* add the drop to the height */
+                float drop = max(0.0, 1.0 - length(center * 0.5 + 0.5 - coord) / radius);
+                drop = 0.5 - cos(drop * PI) * 0.5;
+                info.r += drop * strength;
+                
+                gl_FragColor = info;
+            }
+        `;
+    }
+    
+    /**
+     * Get the update fragment shader
+     */
+    getUpdateFragmentShader() {
+        return `
+            precision highp float;
+            
+            uniform sampler2D texture;
+            uniform vec2 delta;
+            varying vec2 coord;
+            void main() {
+                /* get vertex info */
+                vec4 info = texture(texture, coord);
+                
+                /* calculate average neighbor height */
+                vec2 dx = vec2(delta.x, 0.0);
+                vec2 dy = vec2(0.0, delta.y);
+                float average = (
+                    texture(texture, coord - dx).r +
+                    texture(texture, coord - dy).r +
+                    texture(texture, coord + dx).r +
+                    texture(texture, coord + dy).r
+                ) * 0.25;
+                
+                /* change the velocity to move toward the average */
+                info.g += (average - info.r) * 2.0;
+                
+                /* attenuate the velocity a little so waves do not last forever */
+                info.g *= 0.995;
+                
+                /* move the vertex along the velocity */
+                info.r += info.g;
+                
+                gl_FragColor = info;
+            }
+        `;
+    }
+    
+    /**
+     * Get the normal fragment shader
+     */
+    getNormalFragmentShader() {
+        return `
+            precision highp float;
+            
+            uniform sampler2D texture;
+            uniform vec2 delta;
+            varying vec2 coord;
+            void main() {
+                /* get vertex info */
+                vec4 info = texture(texture, coord);
+                
+                /* update the normal */
+                vec3 dx = vec3(delta.x, texture(texture, vec2(coord.x + delta.x, coord.y)).r - info.r, 0.0);
+                vec3 dy = vec3(0.0, texture(texture, vec2(coord.x, coord.y + delta.y)).r - info.r, delta.y);
+                info.ba = normalize(cross(dy, dx)).xz;
+                
+                gl_FragColor = info;
+            }
+        `;
+    }
+    
+    /**
+     * Get the water vertex shader
+     */
+    getWaterVertexShader() {
+        return `
+            precision highp float;
+            
+            uniform sampler2D waterTexture;
+            uniform float time;
+            
+            varying vec2 vUv;
+            varying vec3 vPosition;
+            varying vec3 vNormal;
+            
+            // Simplified wave function
+            float waveHeight(vec2 position, float time) {
+                float x = position.x * 0.02;
+                float z = position.y * 0.03;
+                
+                float height = 0.0;
+                height += sin(x + time * 1.0) * 0.5;
+                height += cos(z + time * 0.7) * 0.3;
+                height += sin(x * 3.0 + time * 0.8) * 0.2;
+                height += cos(z * 2.5 + time * 0.6) * 0.1;
+                
+                return height * 0.5;
+            }
+            
+            // Calculate normal from height field
+            vec3 calculateNormal(vec2 position, float time) {
+                float eps = 0.1;
+                
+                float h = waveHeight(position, time);
+                float hx1 = waveHeight(position + vec2(eps, 0.0), time);
+                float hx2 = waveHeight(position - vec2(eps, 0.0), time);
+                float hz1 = waveHeight(position + vec2(0.0, eps), time);
+                float hz2 = waveHeight(position - vec2(0.0, eps), time);
+                
+                vec3 normal = vec3(hx2 - hx1, 2.0 * eps, hz2 - hz1);
+                return normalize(normal);
+            }
+            
+            void main() {
+                vUv = uv;
+                
+                // Start with base position
+                vec3 pos = position;
+                
+                // Calculate wave height
+                float height = waveHeight(uv, time);
+                pos.y += height * 5.0;
+                
+                // Calculate normal
+                vNormal = calculateNormal(uv, time);
+                
+                // Pass position to fragment shader
+                vPosition = (modelMatrix * vec4(pos, 1.0)).xyz;
+                
+                // Final position
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `;
+    }
+    
+    /**
+     * Get the water fragment shader
+     */
+    getWaterFragmentShader() {
+        return `
+            precision highp float;
+            
+            uniform vec3 waterColor;
+            uniform vec3 sunDirection;
+            uniform vec3 camera;
+            uniform float time;
+            
+            varying vec2 vUv;
+            varying vec3 vPosition;
+            varying vec3 vNormal;
+            
+            void main() {
+                // Get normalized normal and view direction
+                vec3 normal = normalize(vNormal);
+                vec3 viewDirection = normalize(camera - vPosition);
+                
+                // Calculate fresnel effect - simplified to avoid precision issues
+                float fresnel = 0.02 + 0.98 * pow(1.0 - max(0.0, dot(viewDirection, normal)), 5.0);
+                
+                // Simple sun reflection
+                vec3 sunDir = normalize(sunDirection);
+                vec3 reflectionVector = reflect(-viewDirection, normal);
+                float sunDot = max(0.0, dot(reflectionVector, sunDir));
+                float sunReflection = pow(sunDot, 16.0);
+                
+                // Create some simple wave patterns for variation in color
+                float pattern = sin(vPosition.x * 0.1 + time) * 0.5 + 0.5;
+                pattern += cos(vPosition.z * 0.15 + time * 0.5) * 0.3 + 0.5;
+                pattern = pattern * 0.1 + 0.9;
+                
+                // Final color with simple lighting
+                vec3 color = waterColor * pattern;
+                color += vec3(1.0, 1.0, 0.8) * sunReflection * 0.5;
+                
+                gl_FragColor = vec4(color, 0.8);
+            }
+        `;
+    }
+    
+    /**
+     * Add a water drop at the specified position
+     * @param {number} x - Normalized x coordinate (0-1)
+     * @param {number} y - Normalized y coordinate (0-1)
+     * @param {number} radius - Radius of the drop
+     * @param {number} strength - Strength of the drop
+     */
+    addDrop(x, y, radius, strength) {
+        // Skip if we're using fallback mode or textures aren't available
+        if (this.useFallbackTextures || !this.textureA || !this.textureB) {
+            return;
+        }
+        
+        try {
+            // Swap textures to update the simulation
+            let temp = this.textureA;
+            this.textureA = this.textureB;
+            this.textureB = temp;
+            
+            // Render drop effect to texture
+            const renderTarget = this.renderer.getRenderTarget();
+            this.renderer.setRenderTarget(this.textureA);
+            
+            this.dropShader.uniforms.texture.value = this.textureB.texture;
+            this.dropShader.uniforms.center.value.set(x, y);
+            this.dropShader.uniforms.radius.value = radius;
+            this.dropShader.uniforms.strength.value = strength;
+            
+            this.renderQuad(this.dropShader);
+            
+            this.renderer.setRenderTarget(renderTarget);
+        } catch (e) {
+            console.error("Error adding drop:", e);
+            this.useFallbackTextures = true;
+        }
+    }
+    
+    /**
+     * Update the water simulation
+     */
+    stepSimulation() {
+        // Swap textures to update the simulation
+        let temp = this.textureA;
+        this.textureA = this.textureB;
+        this.textureB = temp;
+        
+        // Render update effect to texture
+        const renderTarget = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(this.textureA);
+        
+        this.updateShader.uniforms.texture.value = this.textureB.texture;
+        this.renderQuad(this.updateShader);
+        
+        this.renderer.setRenderTarget(renderTarget);
+    }
+    
+    /**
+     * Update water normals
+     */
+    updateNormals() {
+        // Swap textures to update the simulation
+        let temp = this.textureA;
+        this.textureA = this.textureB;
+        this.textureB = temp;
+        
+        // Render normal calculation to texture
+        const renderTarget = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(this.textureA);
+        
+        this.normalShader.uniforms.texture.value = this.textureB.texture;
+        this.renderQuad(this.normalShader);
+        
+        this.renderer.setRenderTarget(renderTarget);
+    }
+    
+    /**
+     * Render a quad with the given shader material
+     * @param {THREE.ShaderMaterial} material - Shader material to use
+     */
+    renderQuad(material) {
+        if (!this.quad) {
+            this.quad = new THREE.Mesh(
+                new THREE.PlaneGeometry(2, 2),
+                material
+            );
+            this.quadScene = new THREE.Scene();
+            this.quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+            this.quadScene.add(this.quad);
+        } else {
+            this.quad.material = material;
+        }
+        
+        this.renderer.render(this.quadScene, this.quadCamera);
+    }
+    
+    /**
+     * Update the water simulation and rendering
+     * @param {number} deltaTime - Time step in seconds
+     * @param {THREE.Camera} camera - Camera for reflections
+     */
+    update(deltaTime, camera) {
+        try {
+            // Only run full simulation if WebGL extensions are supported
+            if (!this.useFallbackTextures && this.textureA && this.textureB) {
+                // Update water physics
+                this.stepSimulation();
+                this.updateNormals();
+            } else {
+                // Update time for the fallback animation
+                this.currentTime = (this.currentTime || 0) + deltaTime;
+            }
+            
+            // Update water material uniforms
+            if (this.waterMaterial && camera) {
+                this.waterMaterial.uniforms.time.value += deltaTime;
+                
+                // Only use the texture if we have valid float textures
+                if (!this.useFallbackTextures && this.textureA) {
+                    this.waterMaterial.uniforms.waterTexture.value = this.textureA.texture;
+                }
+                
+                this.waterMaterial.uniforms.camera.value.copy(camera.position);
+            }
+        } catch (e) {
+            console.error("Error updating water simulation:", e);
+            // Mark as fallback for future updates
+            this.useFallbackTextures = true;
+        }
+    }
+    
+    /**
+     * Dispose of water resources
+     */
+    dispose() {
+        if (this.textureA) this.textureA.dispose();
+        if (this.textureB) this.textureB.dispose();
+        
+        if (this.waterMesh) {
+            if (this.scene) this.scene.remove(this.waterMesh);
+            this.waterMesh.geometry.dispose();
+            this.waterMesh.material.dispose();
+        }
+        
+        if (this.quad) {
+            this.quad.geometry.dispose();
+            this.quad.material.dispose();
+            this.quadScene.remove(this.quad);
+        }
+    }
+    
+    /**
+     * Get the water height at a specific position in world space
+     * @param {THREE.Vector3} position - Position to get height at
+     * @returns {number} Water height at the position
+     */
+    getHeightAt(position) {
+        try {
+            // Convert world position to normalized UV coordinates
+            const halfWidth = this.width / 2;
+            const halfHeight = this.height / 2;
+            
+            // Convert world XZ position to UV (0-1) coordinates
+            const u = (position.x + halfWidth) / this.width;
+            const v = (position.z + halfHeight) / this.height;
+            
+            // Check if position is within water bounds
+            if (u < 0 || u > 1 || v < 0 || v > 1) {
+                return 0; // Return 0 for positions outside the water
+            }
+            
+            // Always use the fallback wave equation since direct texture reading
+            // from WebGL is complex and not reliable across all implementations
+            return this.getFallbackHeightAt(position);
+        } catch (e) {
+            console.warn("Error getting water height:", e);
+            return 0; // Return 0 as a safe fallback
+        }
+    }
+    
+    /**
+     * Fallback method to calculate water height using mathematical waves
+     * @param {THREE.Vector3} position - Position to get height at
+     * @returns {number} Calculated water height
+     */
+    getFallbackHeightAt(position) {
+        const time = Date.now() / 1000;
+        
+        // Create a composite wave using multiple sine/cosine waves
+        let height = 0;
+        
+        // Main waves
+        height += Math.sin(position.x * 0.02 + time) * 0.5;
+        height += Math.cos(position.z * 0.03 + time * 0.7) * 0.3;
+        
+        // Add some smaller details
+        height += Math.sin(position.x * 0.06 + time * 1.3) * 0.2;
+        height += Math.cos(position.z * 0.08 + time * 0.8) * 0.1;
+        
+        // Scale the height to match the desired amplitude
+        return height * 0.5;
+    }
+}
+
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Water); 
+
+/***/ })
+
+},
+/******/ function(__webpack_require__) { // webpackRuntimeModules
+/******/ /* webpack/runtime/getFullHash */
+/******/ (() => {
+/******/ 	__webpack_require__.h = () => ("55af395378be53815890")
+/******/ })();
+/******/ 
+/******/ }
+);
+//# sourceMappingURL=main.2808e648c15689f5f7dd.hot-update.js.map

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenSail - Multiplayer Sailing Game</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        
+        <div id="ui-overlay">
+            <div id="wind-indicator">
+                <div id="wind-arrow"></div>
+                <div id="wind-speed">0 knots</div>
+            </div>
+            
+            <div id="boat-info">
+                <div id="heading">Heading: 0°</div>
+                <div id="speed">Speed: 0 knots</div>
+            </div>
+            
+            <div id="race-info">
+                <div id="position">Position: --</div>
+                <div id="timer">00:00</div>
+            </div>
+            
+            <div id="controls-help">
+                <p>A/D or ←/→: Steer | W/S or ↑/↓: Adjust Sail</p>
+            </div>
+        </div>
+        
+        <div id="game-menu" class="overlay">
+            <h1>OpenSail</h1>
+            <button id="start-game">Start Race</button>
+            <button id="join-game">Join Race</button>
+            <div id="player-name-container">
+                <input type="text" id="player-name" placeholder="Your Name">
+            </div>
+        </div>
+        
+        <div id="loading-screen" class="overlay">
+            <h2>Loading...</h2>
+            <div id="loading-bar-container">
+                <div id="loading-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/examples/js/loaders/OBJLoader.js"></script>
+    
+    <!-- Game Scripts -->
+    <script src="js/utils.js"></script>
+    <script src="js/boat.js"></script>
+    <script src="js/environment.js"></script>
+    <script src="js/renderer.js"></script>
+    <script src="js/controls.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/client.js"></script>
+</body>
+</html> 
